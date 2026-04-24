@@ -47,6 +47,10 @@ class LineValuationDto(_StrictModel):
     modifier_source: Optional[str] = None
     modifier_reason: Optional[str] = None
     descripcion_linea: Optional[str] = None
+    # Sub-tanda 2D (ampliación): cantidad que emite el LLM para
+    # sintéticas de tipo TIEMPO (minutos de exceso). Solo relevante
+    # cuando modifier_source='tiempo_exceso'. Puede ser 0.
+    cantidad_override: Optional[float] = None
     rol_linea: Optional[str] = None
     match_method: Literal["exact_concept", "semantic", "price_only", "no_match"]
     matched_contrato_line_id: Optional[int] = None

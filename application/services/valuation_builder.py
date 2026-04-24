@@ -456,48 +456,88 @@ class ValuationBuilder:
             else None
         )
 
-        # Cantidad: del parent_record si existe (ya resuelto con factor
-        # de conversión), si no del albarán directamente como fallback.
-        if parent_record is not None and parent_record.cantidad_albaran is not None:
-            cantidad = parent_record.cantidad_albaran
-        elif parent_albaran is not None:
-            cantidad = parent_albaran.cantidad
-        else:
-            cantidad = None
+        # Detección de línea de tiempo (M6 del prompt): tiene semántica
+        # distinta del resto — cantidad y unidad no heredan del parent,
+        # vienen del LLM (cantidad = minutos de exceso, unidad = "min").
+        is_time_line = (line.modifier_source == "tiempo_exceso")
 
-        # Unidad: prioridad al record ya resuelto del parent
-        # (unidad_contrato → unidad_albaran), con fallback al albarán.
-        unidad: str | None = None
-        if parent_record is not None:
-            unidad = parent_record.unidad_contrato or parent_record.unidad_albaran
-        if not unidad and parent_albaran is not None:
-            unidad = parent_albaran.unidad_medida
-
-        # Categoría de unidad: se hereda igual.
-        unidad_cat: str
-        if parent_record is not None and parent_record.unidad_categoria:
-            unidad_cat = parent_record.unidad_categoria
-        elif parent_albaran is not None and parent_albaran.unidad_categoria:
-            unidad_cat = parent_albaran.unidad_categoria
+        if is_time_line:
+            # cantidad_override es el CAMPO CLAVE para líneas de tiempo:
+            # el LLM calcula los minutos de exceso a partir de
+            # notas_tiempo y los manda aquí. Puede ser 0 (descarga
+            # dentro del tiempo). Si el LLM no lo envía (no debería
+            # pasar si emite una M6, pero por seguridad), fallback a
+            # 0.0 — así al menos la línea se persiste aunque sin
+            # información real de minutos.
+            cantidad = (
+                float(line.cantidad_override)
+                if line.cantidad_override is not None
+                else 0.0
+            )
+            unidad = "min"
+            unidad_cat = "time"
         else:
-            unidad_cat = "unknown"
+            # Cantidad: del parent_record si existe (ya resuelto con factor
+            # de conversión), si no del albarán directamente como fallback.
+            if parent_record is not None and parent_record.cantidad_albaran is not None:
+                cantidad = parent_record.cantidad_albaran
+            elif parent_albaran is not None:
+                cantidad = parent_albaran.cantidad
+            else:
+                cantidad = None
+
+            # Unidad: prioridad al record ya resuelto del parent
+            # (unidad_contrato → unidad_albaran), con fallback al albarán.
+            unidad: str | None = None
+            if parent_record is not None:
+                unidad = parent_record.unidad_contrato or parent_record.unidad_albaran
+            if not unidad and parent_albaran is not None:
+                unidad = parent_albaran.unidad_medida
+
+            # Categoría de unidad: se hereda igual.
+            if parent_record is not None and parent_record.unidad_categoria:
+                unidad_cat = parent_record.unidad_categoria
+            elif parent_albaran is not None and parent_albaran.unidad_categoria:
+                unidad_cat = parent_albaran.unidad_categoria
+            else:
+                unidad_cat = "unknown"
 
         precio_final = line.precio_unitario_pdf_inferido
         precio_source = "pdf_inference" if precio_final is not None else "none"
         precio_agreement = "only_1b" if precio_final is not None else "neither"
 
+        # Cálculo de importe.
+        #
+        # Regla normal: cantidad × precio, ambos no-null → importe.
+        # Casos especiales:
+        #   - cantidad = 0 (típicamente línea de tiempo sin exceso):
+        #     importe = 0 siempre, independientemente de que haya
+        #     tarifa o no. Así el revisor ve "0" en la tabla en vez
+        #     de "—", que es informativo ("cobré 0 porque no me
+        #     excedí" es distinto a "no sé cuánto cobrar").
+        #   - cantidad > 0 y precio null: importe null (Forma C).
+        #   - cantidad null: importe null.
         importe_calc: float | None = None
         importe_source = "none"
-        if cantidad is not None and precio_final is not None:
-            importe_calc = round(float(cantidad) * float(precio_final), 2)
-            importe_source = "calculated"
+        if cantidad is not None:
+            if float(cantidad) == 0.0:
+                importe_calc = 0.0
+                importe_source = "calculated"
+            elif precio_final is not None:
+                importe_calc = round(float(cantidad) * float(precio_final), 2)
+                importe_source = "calculated"
 
         partida_result = self._partida_matcher.resolve_partida_for_synthetic(
             codigo_partida_base=partida_heredada,
         )
 
         reasons: list[str] = list(partida_result.reasons)
-        if precio_final is None:
+        # 'modifier_identified_no_tariff' solo si el modificador tiene
+        # cantidad > 0 (hay algo que cobrar) y no encontramos tarifa.
+        # Si cantidad es 0 (caso típico de tiempo sin exceso), no hay
+        # nada que revisar.
+        has_quantity = cantidad is not None and float(cantidad) > 0.0
+        if precio_final is None and has_quantity:
             reasons.append("modifier_identified_no_tariff")
         if parent_merge_line_id is None:
             reasons.append("synthetic_without_parent")
@@ -505,7 +545,7 @@ class ValuationBuilder:
             reasons.append("synthetic_parent_not_in_context")
 
         review_required = (
-            precio_final is None
+            (precio_final is None and has_quantity)
             or parent_merge_line_id is None
             or parent_albaran is None
             or line.match_confidence_pct < 60.0
