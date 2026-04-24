@@ -1,0 +1,163 @@
+# Registro de unidades de medida para el servicio 6 (valuation-persistence).
+#
+# Formato:
+#   categories:
+#     <category>:
+#       base: <unidad_base>
+#       units:
+#         <alias>: factor_a_base
+#
+# Reglas:
+#   - factor_a_base convierte de la unidad al "base" de la categoría.
+#     Ej.: t → kg con factor 1000 (1 t = 1000 kg).
+#   - Las unidades se normalizan antes de consultar: se pasa a minúsculas,
+#     se quitan tildes, espacios, puntos, barras y guiones. "Kg", "kg.",
+#     "KG " y "kg" mapean todas a "kg".
+#   - Dos unidades son convertibles entre sí si y solo si pertenecen a
+#     la misma categoría. Si no están aquí, el servicio marca
+#     ``unit_category_match=false`` y NO valora la línea.
+#   - La categoría "lump_sum" (partida alzada, PA) tiene 1 unidad y solo
+#     convierte consigo misma: factor = 1.0. Si el albarán trae 1 PA y
+#     el contrato da precio en PA, el importe = precio.
+
+categories:
+
+  mass:
+    base: kg
+    units:
+      kg: 1.0
+      kgs: 1.0
+      kilo: 1.0
+      kilos: 1.0
+      kilogramo: 1.0
+      kilogramos: 1.0
+      g: 0.001
+      gr: 0.001
+      grs: 0.001
+      gramo: 0.001
+      gramos: 0.001
+      t: 1000.0
+      tn: 1000.0
+      tm: 1000.0
+      ton: 1000.0
+      tons: 1000.0
+      tonelada: 1000.0
+      toneladas: 1000.0
+
+  volume:
+    base: m3
+    units:
+      m3: 1.0
+      mc: 1.0
+      metrocubico: 1.0
+      metroscubicos: 1.0
+      l: 0.001
+      lt: 0.001
+      lts: 0.001
+      litro: 0.001
+      litros: 0.001
+      dm3: 0.001
+      cm3: 0.000001
+      cl: 0.00001
+      # NOTA: "ml" como mililitros (volumen) entra en conflicto con
+      # "ml" como metro lineal (construcción). Si recibís "ml" como
+      # volumen, añadidlo aquí y quitad "ml" de la categoría length.
+      # Por defecto en construcción "ml" = metro lineal (ver length).
+
+  length:
+    base: m
+    units:
+      m: 1.0
+      metro: 1.0
+      metros: 1.0
+      ml: 1.0
+      metrolineal: 1.0
+      metroslineales: 1.0
+      cm: 0.01
+      mm: 0.001
+      km: 1000.0
+
+  area:
+    base: m2
+    units:
+      m2: 1.0
+      metrocuadrado: 1.0
+      metroscuadrados: 1.0
+      cm2: 0.0001
+      ha: 10000.0
+      hectarea: 10000.0
+      hectareas: 10000.0
+
+  count:
+    base: ud
+    units:
+      ud: 1.0
+      uds: 1.0
+      und: 1.0
+      unds: 1.0
+      unidad: 1.0
+      unidades: 1.0
+      pza: 1.0
+      pzs: 1.0
+      pieza: 1.0
+      piezas: 1.0
+      par: 2.0
+      pares: 2.0
+      # Caja/saco/bolsa/palé NO tienen factor estable (depende del
+      # producto). Los marcamos con factor 1 pero también los
+      # registramos como ``ambiguous``: si el albarán usa caja y el
+      # contrato usa ud, el servicio propone 1 caja = 1 ud pero
+      # marca ``review_required=true``.
+      caja: 1.0
+      cajas: 1.0
+      bolsa: 1.0
+      bolsas: 1.0
+      saco: 1.0
+      sacos: 1.0
+      rollo: 1.0
+      rollos: 1.0
+      palet: 1.0
+      pallet: 1.0
+      palets: 1.0
+      pallets: 1.0
+
+  time:
+    base: h
+    units:
+      h: 1.0
+      hr: 1.0
+      hrs: 1.0
+      hora: 1.0
+      horas: 1.0
+      min: 0.01666666667
+      minuto: 0.01666666667
+      minutos: 0.01666666667
+      dia: 8.0           # 1 jornada laboral ≈ 8h (ajustable)
+      dias: 8.0
+      jornada: 8.0
+      jornadas: 8.0
+
+  lump_sum:
+    base: pa
+    units:
+      pa: 1.0
+      partidaalzada: 1.0
+      tantoalzado: 1.0
+      talzado: 1.0
+
+# Unidades "ambiguas": mismo nombre pero factor no estable.
+# El servicio las convierte igual (factor 1) pero dispara
+# ``review_required=true`` y anota la ambigüedad.
+ambiguous_units:
+  - caja
+  - cajas
+  - bolsa
+  - bolsas
+  - saco
+  - sacos
+  - rollo
+  - rollos
+  - palet
+  - pallet
+  - palets
+  - pallets
