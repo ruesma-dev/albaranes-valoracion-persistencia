@@ -166,6 +166,38 @@ _DDL_STATEMENTS: tuple[tuple[str, str], ...] = (
     ("ALTER albaran_line_valuations.modifiers_applied_json",
      "ALTER TABLE albaran_line_valuations "
      "ADD COLUMN IF NOT EXISTS modifiers_applied_json TEXT"),
+
+    # -----------------------------------------------------------------
+    # Sub-tanda 2D: soporte para líneas sintéticas.
+    # Ver domain/models/valuation_records.py para semántica.
+    # Todos idempotentes. El svc3 también aplica estos ALTER en su
+    # _VALUATION_DDL como doble red de seguridad.
+    # -----------------------------------------------------------------
+    ("ALTER merge_line_id DROP NOT NULL",
+     "ALTER TABLE albaran_line_valuations "
+     "ALTER COLUMN merge_line_id DROP NOT NULL"),
+    ("ALTER albaran_line_valuations.line_kind",
+     "ALTER TABLE albaran_line_valuations "
+     "ADD COLUMN IF NOT EXISTS line_kind VARCHAR(32) "
+     "NOT NULL DEFAULT 'from_albaran'"),
+    ("ALTER albaran_line_valuations.parent_merge_line_id",
+     "ALTER TABLE albaran_line_valuations "
+     "ADD COLUMN IF NOT EXISTS parent_merge_line_id INTEGER"),
+    ("ALTER albaran_line_valuations.modifier_source",
+     "ALTER TABLE albaran_line_valuations "
+     "ADD COLUMN IF NOT EXISTS modifier_source VARCHAR(32)"),
+    ("ALTER albaran_line_valuations.modifier_reason",
+     "ALTER TABLE albaran_line_valuations "
+     "ADD COLUMN IF NOT EXISTS modifier_reason TEXT"),
+    ("ALTER albaran_line_valuations.descripcion_linea",
+     "ALTER TABLE albaran_line_valuations "
+     "ADD COLUMN IF NOT EXISTS descripcion_linea TEXT"),
+    ("INDEX albaran_line_valuations.parent_merge_line_id",
+     "CREATE INDEX IF NOT EXISTS ix_albaran_line_valuations_parent "
+     "ON albaran_line_valuations(parent_merge_line_id)"),
+    ("INDEX albaran_line_valuations.line_kind",
+     "CREATE INDEX IF NOT EXISTS ix_albaran_line_valuations_line_kind "
+     "ON albaran_line_valuations(line_kind)"),
 )
 
 
@@ -500,11 +532,7 @@ class SqlAlchemyValuationRepository(ValuationRepository):
             ),
             ia_reasoning=line.ia_reasoning,
             created_at_utc=created_at_utc,
-            # ---------------------------------------------------------
-            # Campos nuevos sub-tanda 2C. modifiers_applied se
-            # serializa como JSON string (null si es None, que es el
-            # caso normal mientras el LLM no devuelva la lista).
-            # ---------------------------------------------------------
+            # Sub-tanda 2C: contexto de línea.
             rol_linea=line.rol_linea,
             ref_linea_base_merge_id=line.ref_linea_base_merge_id,
             tarifa_pdf_encontrada=line.tarifa_pdf_encontrada,
@@ -513,6 +541,12 @@ class SqlAlchemyValuationRepository(ValuationRepository):
                 if line.modifiers_applied is not None
                 else None
             ),
+            # Sub-tanda 2D: líneas sintéticas.
+            line_kind=line.line_kind,
+            parent_merge_line_id=line.parent_merge_line_id,
+            modifier_source=line.modifier_source,
+            modifier_reason=line.modifier_reason,
+            descripcion_linea=line.descripcion_linea,
         )
 
     # ------------------------------------------------------------------ #
@@ -574,9 +608,7 @@ class SqlAlchemyValuationRepository(ValuationRepository):
             "review_reasons": json.loads(line.review_reasons_json or "[]"),
             "ia_reasoning": line.ia_reasoning,
             "created_at_utc": line.created_at_utc,
-            # Sub-tanda 2C: exponer los campos nuevos en la respuesta
-            # HTTP GET /v1/albaranes/{id}/valuation. Incluye el parse
-            # del JSON de modifiers_applied (o null).
+            # Sub-tanda 2C: contexto estructural.
             "rol_linea": line.rol_linea,
             "ref_linea_base_merge_id": line.ref_linea_base_merge_id,
             "tarifa_pdf_encontrada": (
@@ -589,6 +621,12 @@ class SqlAlchemyValuationRepository(ValuationRepository):
                 if line.modifiers_applied_json
                 else None
             ),
+            # Sub-tanda 2D: líneas sintéticas.
+            "line_kind": line.line_kind,
+            "parent_merge_line_id": line.parent_merge_line_id,
+            "modifier_source": line.modifier_source,
+            "modifier_reason": line.modifier_reason,
+            "descripcion_linea": line.descripcion_linea,
         }
 
     @staticmethod

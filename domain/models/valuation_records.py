@@ -55,9 +55,16 @@ class DerivedContratoLineRecord:
 
 @dataclass
 class LineValuationRecord:
-    """Resultado final a persistir en albaran_line_valuations."""
+    """Resultado final a persistir en albaran_line_valuations.
 
-    merge_line_id: int
+    V3 (sub-tanda 2D): soporte para LÍNEAS SINTÉTICAS.
+    ``merge_line_id`` pasa a ser Optional. Cuando es None, la línea es
+    un modificador sintético que cuelga de la línea base apuntada por
+    ``parent_merge_line_id``.
+    """
+
+    # Para from_albaran: el id de la línea del albarán. Para sintéticas: None.
+    merge_line_id: int | None
     matched_contrato_line_id: int | None
     derived_contrato_line_record: DerivedContratoLineRecord | None
 
@@ -127,6 +134,40 @@ class LineValuationRecord:
     ref_linea_base_merge_id: int | None = None
     tarifa_pdf_encontrada: bool | None = None
     modifiers_applied: list[dict] | None = None
+
+    # ------------------------------------------------------------------
+    # Campos nuevos de la sub-tanda 2D. Soporte para LÍNEAS SINTÉTICAS
+    # (modificadores implícitos de hormigón identificados por el
+    # valorador).
+    #
+    # line_kind:
+    #   'from_albaran' (default): línea normal, procede del albarán.
+    #   'synthetic_modifier': línea sintética generada por el valorador
+    #   para representar un modificador que no aparece como línea en el
+    #   albarán pero sí tarifado en el contrato (año, consistencia,
+    #   árido, aditivo, residuos, tiempo).
+    #
+    # parent_merge_line_id:
+    #   Solo para sintéticas: el merge_line_id de la línea base de la
+    #   que cuelga este modificador. Permite agrupar en la UI.
+    #   Null para 'from_albaran'.
+    #
+    # modifier_source / modifier_reason:
+    #   Solo para sintéticas. ``modifier_source`` es una etiqueta
+    #   canónica ('codigo_producto', 'observaciones', 'year_contract',
+    #   'year_albaran', 'tiempo_exceso', 'gestion_residuos', 'otro').
+    #   ``modifier_reason`` es texto libre para auditoría humana.
+    #
+    # descripcion_linea:
+    #   Para sintéticas: texto que verá el revisor ("INCREMENTO POR
+    #   CONSISTENCIA FLUIDA"). Para from_albaran es null (la descripción
+    #   ya viene de la línea del albarán).
+    # ------------------------------------------------------------------
+    line_kind: str = "from_albaran"
+    parent_merge_line_id: int | None = None
+    modifier_source: str | None = None
+    modifier_reason: str | None = None
+    descripcion_linea: str | None = None
 
 
 @dataclass

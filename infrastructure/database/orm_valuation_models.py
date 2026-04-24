@@ -183,10 +183,16 @@ class AlbaranLineValuationOrm(Base):
         nullable=False,
         index=True,
     )
-    merge_line_id: Mapped[int] = mapped_column(
+    # -----------------------------------------------------------------
+    # V3 / sub-tanda 2D: merge_line_id es ahora nullable.
+    # Para líneas sintéticas (modificadores implícitos) el valorador no
+    # tiene una línea del albarán concreta — por eso merge_line_id es
+    # null y parent_merge_line_id apunta a la línea base.
+    # -----------------------------------------------------------------
+    merge_line_id: Mapped[int | None] = mapped_column(
         Integer,
         ForeignKey("albaran_lines_merge.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
         index=True,
     )
     matched_contrato_line_id: Mapped[int | None] = mapped_column(
@@ -259,6 +265,21 @@ class AlbaranLineValuationOrm(Base):
     ref_linea_base_merge_id: Mapped[int | None] = mapped_column(Integer)
     tarifa_pdf_encontrada: Mapped[bool | None] = mapped_column(Boolean)
     modifiers_applied_json: Mapped[str | None] = mapped_column(Text)
+
+    # -----------------------------------------------------------------
+    # Sub-tanda 2D: soporte para líneas sintéticas.
+    # Ver domain/models/valuation_records.py para semántica.
+    #
+    # line_kind NOT NULL con default 'from_albaran' para compatibilidad
+    # retroactiva: los records previos quedan marcados como normales.
+    # -----------------------------------------------------------------
+    line_kind: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="from_albaran",
+    )
+    parent_merge_line_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    modifier_source: Mapped[str | None] = mapped_column(String(32))
+    modifier_reason: Mapped[str | None] = mapped_column(Text)
+    descripcion_linea: Mapped[str | None] = mapped_column(Text)
 
     valuation: Mapped[AlbaranValuationOrm] = relationship(
         back_populates="lines",

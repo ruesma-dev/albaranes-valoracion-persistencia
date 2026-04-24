@@ -31,9 +31,23 @@ class ValuationEnvelopeMeta(_StrictModel):
 
 
 class LineValuationDto(_StrictModel):
-    """Réplica del schema de salida de la IA (ver svc 5)."""
+    """Réplica del schema de salida de la IA (ver svc 5).
 
-    merge_line_id: int
+    V3 (sub-tanda 2D): soporte para líneas sintéticas (modificadores
+    implícitos identificados por el valorador en hormigón). Cuando
+    ``line_kind == 'synthetic_modifier'``:
+      - merge_line_id es null
+      - parent_merge_line_id apunta a la línea base
+      - descripcion_linea contiene el texto que verá el revisor
+    """
+
+    merge_line_id: Optional[int] = None
+    line_kind: Literal["from_albaran", "synthetic_modifier"] = "from_albaran"
+    parent_merge_line_id: Optional[int] = None
+    modifier_source: Optional[str] = None
+    modifier_reason: Optional[str] = None
+    descripcion_linea: Optional[str] = None
+    rol_linea: Optional[str] = None
     match_method: Literal["exact_concept", "semantic", "price_only", "no_match"]
     matched_contrato_line_id: Optional[int] = None
     match_confidence_pct: float = 0.0

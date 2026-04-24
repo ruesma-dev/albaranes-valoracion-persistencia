@@ -171,6 +171,33 @@ class PartidaMatcher:
             reasons=["inherited_from_base_line"],
         )
 
+    def resolve_partida_for_synthetic(
+        self,
+        *,
+        codigo_partida_base: str | None,
+    ) -> PartidaMatchResult:
+        """Partida heredada para una línea sintética (sub-tanda 2D).
+
+        Una línea sintética (``line_kind='synthetic_modifier'``) es un
+        modificador implícito generado por el valorador, no aparece como
+        línea en el albarán. Hereda la partida de la línea base (a la
+        que apunta por ``parent_merge_line_id``) SIN hacer matching en
+        contrato ni crear línea derivada.
+
+        El ``partida_action`` devuelto es ``'inherited_from_base_line'``
+        (mismo valor que para complementarias de 2C; semánticamente es
+        el mismo concepto: hereda, no busca).
+
+        Esta función es funcionalmente idéntica a
+        ``resolve_partida_for_complementaria`` pero se deja como método
+        separado para dejar claro en el código qué tipo de línea se
+        está procesando y dejar margen a bifurcar en el futuro si la
+        regla cambia para una u otra.
+        """
+        return self.resolve_partida_for_complementaria(
+            codigo_partida_base=codigo_partida_base,
+        )
+
     def _build_derived(
         self,
         *,
