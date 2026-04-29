@@ -461,6 +461,14 @@ class ValuationBuilder:
         # vienen del LLM (cantidad = minutos de exceso, unidad = "min").
         is_time_line = (line.modifier_source == "tiempo_exceso")
 
+        # Detección de línea de carga incompleta (M7 del prompt):
+        # similar a tiempo en que la cantidad la calcula el LLM
+        # (m³ que faltan hasta el mínimo del contrato), PERO la unidad
+        # y la categoría se heredan del parent (es m³, no "min").
+        is_carga_incompleta_line = (
+            line.modifier_source == "carga_incompleta"
+        )
+
         if is_time_line:
             # cantidad_override es el CAMPO CLAVE para líneas de tiempo:
             # el LLM calcula los minutos de exceso a partir de
@@ -476,6 +484,31 @@ class ValuationBuilder:
             )
             unidad = "min"
             unidad_cat = "time"
+        elif is_carga_incompleta_line:
+            # cantidad_override = m³ de diferencia hasta el mínimo
+            # facturable del contrato (típicamente max(0, 6 - vertido)).
+            # Calculada por el LLM en M7.3. Si no viene, fallback a 0.0
+            # (el revisor verá la línea con importe 0 y sabrá que algo
+            # falló en el cálculo).
+            cantidad = (
+                float(line.cantidad_override)
+                if line.cantidad_override is not None
+                else 0.0
+            )
+            # Unidad y categoría: igual que el resto de sintéticas
+            # (heredan del parent, típicamente m³).
+            unidad: str | None = None
+            if parent_record is not None:
+                unidad = parent_record.unidad_contrato or parent_record.unidad_albaran
+            if not unidad and parent_albaran is not None:
+                unidad = parent_albaran.unidad_medida
+
+            if parent_record is not None and parent_record.unidad_categoria:
+                unidad_cat = parent_record.unidad_categoria
+            elif parent_albaran is not None and parent_albaran.unidad_categoria:
+                unidad_cat = parent_albaran.unidad_categoria
+            else:
+                unidad_cat = "unknown"
         else:
             # Cantidad: del parent_record si existe (ya resuelto con factor
             # de conversión), si no del albarán directamente como fallback.
