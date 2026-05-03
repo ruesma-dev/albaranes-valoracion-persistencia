@@ -281,6 +281,18 @@ class AlbaranLineValuationOrm(Base):
     modifier_reason: Mapped[str | None] = mapped_column(Text)
     descripcion_linea: Mapped[str | None] = mapped_column(Text)
 
+    # -----------------------------------------------------------------
+    # Tanda descuento — abr 2026
+    #
+    # descuento_albaran_aplicado: FLOAT. Porcentaje 0-100 del descuento
+    # que se aplicó al precio del contrato para calcular
+    # ``importe_calculado``. Persistido para auditoría.
+    #
+    # Null si no se aplicó descuento (línea sin descuento, o descuento
+    # fuera de rango ignorado por el calculator).
+    # -----------------------------------------------------------------
+    descuento_albaran_aplicado: Mapped[float | None] = mapped_column(Float)
+
     valuation: Mapped[AlbaranValuationOrm] = relationship(
         back_populates="lines",
     )

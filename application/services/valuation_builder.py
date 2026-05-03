@@ -48,7 +48,28 @@ class ValuationBuilder:
           (resolve_partida_for_synthetic).
 
     Este orden garantiza que cuando una línea complementaria o sintética
-    consulta la partida de su base, la base ya está resuelta.
+    consulta la partida (o el descuento) de su base, la base ya está
+    resuelta.
+
+    -------------------------------------------------------------------
+    Tanda descuento — abr 2026
+    -------------------------------------------------------------------
+    El builder ahora propaga ``descuento_albaran`` al ImporteCalculator
+    para que la fórmula del importe valorado sea:
+
+        importe = cantidad × precio_contrato × (1 - descuento/100)
+
+    Reglas de propagación:
+      - Líneas 'from_albaran' (base o complementaria): el descuento
+        viene del propio AlbaranLineContextDto.descuento_albaran.
+      - Líneas 'synthetic_modifier' (M1-M7): heredan el descuento del
+        record YA RESUELTO de la línea base padre (parent_record).
+        Decisión de negocio Construcciones Ruesma: las sintéticas
+        heredan el descuento del padre.
+
+    El descuento aplicado se persiste en
+    ``LineValuationRecord.descuento_albaran_aplicado`` para auditoría.
+    -------------------------------------------------------------------
     """
 
     def __init__(
@@ -261,6 +282,16 @@ class ValuationBuilder:
         ctx = albaran_line.contexto_linea if albaran_line is not None else None
         rol_linea = ctx.rol_linea if ctx is not None else None
 
+        # ------------------------------------------------------------ #
+        # Tanda descuento — abr 2026
+        # Descuento de la línea del albarán (None si no hay).
+        # ------------------------------------------------------------ #
+        descuento_linea: float | None = (
+            albaran_line.descuento_albaran
+            if albaran_line is not None
+            else None
+        )
+
         # 1. Unit guard
         categoria, category_match, guard_reasons = self._guard.resolve(
             line=line,
@@ -331,7 +362,7 @@ class ValuationBuilder:
                 unidad_contrato=unidad_contrato_para_conversion,
             )
 
-        # 5. Importe
+        # 5. Importe (con descuento aplicado)
         importe_result = self._importe_calc.compute(
             cantidad_convertida=converted.cantidad_convertida,
             cantidad_albaran=(
@@ -341,6 +372,7 @@ class ValuationBuilder:
             importe_albaran_declarado=(
                 albaran_line.importe_albaran if albaran_line else None
             ),
+            descuento_pct=descuento_linea,
         )
 
         reasons: list[str] = []
@@ -420,6 +452,8 @@ class ValuationBuilder:
             modifier_source=None,
             modifier_reason=None,
             descripcion_linea=None,
+            # Tanda descuento — abr 2026
+            descuento_albaran_aplicado=importe_result.descuento_aplicado,
         )
 
     def _build_synthetic_line(
@@ -449,10 +483,27 @@ class ValuationBuilder:
           - Si precio null → review_required con motivo
             'modifier_identified_no_tariff' (el revisor decide si factura).
           - importe = cantidad * precio cuando ambos disponibles.
+
+        Tanda descuento — abr 2026:
+          - Hereda ``descuento_albaran_aplicado`` del parent_record.
+          - Si parent_record es None (no resuelto), no aplica descuento.
+          - El descuento se aplica al importe sintético igual que en
+            las líneas from_albaran (regla de negocio: las sintéticas
+            heredan el descuento del padre).
         """
         parent_albaran = (
             albaran_by_id.get(parent_merge_line_id)
             if parent_merge_line_id is not None
+            else None
+        )
+
+        # ------------------------------------------------------------ #
+        # Tanda descuento — abr 2026
+        # Herencia del descuento del padre.
+        # ------------------------------------------------------------ #
+        descuento_heredado: float | None = (
+            parent_record.descuento_albaran_aplicado
+            if parent_record is not None
             else None
         )
 
@@ -539,25 +590,35 @@ class ValuationBuilder:
         precio_source = "pdf_inference" if precio_final is not None else "none"
         precio_agreement = "only_1b" if precio_final is not None else "neither"
 
-        # Cálculo de importe.
+        # ------------------------------------------------------------ #
+        # Cálculo de importe (con descuento heredado del padre).
         #
-        # Regla normal: cantidad × precio, ambos no-null → importe.
+        # Regla normal: cantidad × precio × (1 - descuento/100).
         # Casos especiales:
         #   - cantidad = 0 (típicamente línea de tiempo sin exceso):
-        #     importe = 0 siempre, independientemente de que haya
-        #     tarifa o no. Así el revisor ve "0" en la tabla en vez
-        #     de "—", que es informativo ("cobré 0 porque no me
-        #     excedí" es distinto a "no sé cuánto cobrar").
+        #     importe = 0 siempre.
         #   - cantidad > 0 y precio null: importe null (Forma C).
         #   - cantidad null: importe null.
+        # ------------------------------------------------------------ #
         importe_calc: float | None = None
         importe_source = "none"
+        descuento_aplicado: float | None = None
+
         if cantidad is not None:
             if float(cantidad) == 0.0:
                 importe_calc = 0.0
                 importe_source = "calculated"
             elif precio_final is not None:
-                importe_calc = round(float(cantidad) * float(precio_final), 2)
+                # Aplicación del descuento heredado al importe sintético.
+                bruto = float(cantidad) * float(precio_final)
+                if descuento_heredado is not None and descuento_heredado > 0.0:
+                    importe_calc = round(
+                        bruto * (1.0 - descuento_heredado / 100.0),
+                        2,
+                    )
+                    descuento_aplicado = descuento_heredado
+                else:
+                    importe_calc = round(bruto, 2)
                 importe_source = "calculated"
 
         partida_result = self._partida_matcher.resolve_partida_for_synthetic(
@@ -576,6 +637,10 @@ class ValuationBuilder:
             reasons.append("synthetic_without_parent")
         elif parent_albaran is None:
             reasons.append("synthetic_parent_not_in_context")
+        if descuento_aplicado is not None and descuento_aplicado > 0.0:
+            reasons.append(
+                f"descuento_heredado_aplicado:{descuento_aplicado}%"
+            )
 
         review_required = (
             (precio_final is None and has_quantity)
@@ -624,6 +689,8 @@ class ValuationBuilder:
             modifier_source=line.modifier_source,
             modifier_reason=line.modifier_reason,
             descripcion_linea=line.descripcion_linea,
+            # Tanda descuento — abr 2026 (heredado del padre)
+            descuento_albaran_aplicado=descuento_aplicado,
         )
 
     @staticmethod

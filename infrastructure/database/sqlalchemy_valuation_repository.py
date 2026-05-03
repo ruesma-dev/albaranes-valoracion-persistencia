@@ -198,6 +198,16 @@ _DDL_STATEMENTS: tuple[tuple[str, str], ...] = (
     ("INDEX albaran_line_valuations.line_kind",
      "CREATE INDEX IF NOT EXISTS ix_albaran_line_valuations_line_kind "
      "ON albaran_line_valuations(line_kind)"),
+
+    # -----------------------------------------------------------------
+    # Tanda descuento — abr 2026
+    #
+    # Columna nueva para auditar el descuento aplicado en cada línea
+    # valorada. Idempotente (IF NOT EXISTS).
+    # -----------------------------------------------------------------
+    ("ALTER albaran_line_valuations.descuento_albaran_aplicado",
+     "ALTER TABLE albaran_line_valuations "
+     "ADD COLUMN IF NOT EXISTS descuento_albaran_aplicado DOUBLE PRECISION"),
 )
 
 
@@ -547,6 +557,8 @@ class SqlAlchemyValuationRepository(ValuationRepository):
             modifier_source=line.modifier_source,
             modifier_reason=line.modifier_reason,
             descripcion_linea=line.descripcion_linea,
+            # Tanda descuento — abr 2026
+            descuento_albaran_aplicado=line.descuento_albaran_aplicado,
         )
 
     # ------------------------------------------------------------------ #
@@ -627,6 +639,8 @@ class SqlAlchemyValuationRepository(ValuationRepository):
             "modifier_source": line.modifier_source,
             "modifier_reason": line.modifier_reason,
             "descripcion_linea": line.descripcion_linea,
+            # Tanda descuento — abr 2026
+            "descuento_albaran_aplicado": line.descuento_albaran_aplicado,
         }
 
     @staticmethod

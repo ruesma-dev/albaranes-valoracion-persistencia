@@ -169,6 +169,28 @@ class LineValuationRecord:
     modifier_reason: str | None = None
     descripcion_linea: str | None = None
 
+    # ------------------------------------------------------------------
+    # Tanda descuento — abr 2026
+    #
+    # descuento_albaran_aplicado:
+    #   Porcentaje de descuento (0-100) que se aplicó al precio del
+    #   contrato para calcular ``importe_calculado``. Persistido para
+    #   auditoría: si en el futuro alguien pregunta "¿por qué este
+    #   importe vale X y no Y?", se puede inspeccionar este campo y
+    #   reconstruir el cálculo.
+    #
+    #   Política:
+    #     - Líneas 'from_albaran' (rol_linea base o complementaria):
+    #       copia el ``descuento_albaran`` de la línea del albarán.
+    #       None si la línea del albarán no tiene descuento.
+    #     - Líneas 'synthetic_modifier' (M1-M7): hereda el descuento
+    #       de la línea base padre (decisión de negocio Ruesma:
+    #       las sintéticas heredan).
+    #     - 0 o None significan "no aplicar descuento" (resultado
+    #       idéntico en la fórmula).
+    # ------------------------------------------------------------------
+    descuento_albaran_aplicado: float | None = None
+
 
 @dataclass
 class ValuationHeaderRecord:

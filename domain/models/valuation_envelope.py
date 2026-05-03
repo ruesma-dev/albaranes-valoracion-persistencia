@@ -96,6 +96,26 @@ class AlbaranLineContextDto(_StrictModel):
     # -----------------------------------------------------------------
     contexto_linea: Optional[ContextoLinea] = None
 
+    # -----------------------------------------------------------------
+    # Tanda descuento — abr 2026
+    #
+    # Descuento porcentual de la línea (ej. 40 = 40%) y precio neto
+    # unitario tras descuento, ambos venidos de albaran_lines_merge
+    # vía svc5.
+    #
+    # Se usan en el ImporteCalculator para calcular el importe valorado
+    # como cantidad × precio_contrato × (1 - descuento/100).
+    #
+    # Las líneas sintéticas (M1-M7) heredan el descuento de su línea
+    # base padre (decisión de negocio Construcciones Ruesma).
+    #
+    # Compatibilidad retroactiva: ambos opcionales con default None.
+    # Envelopes antiguos sin estos campos siguen funcionando: el
+    # builder interpreta None como "sin descuento" → fórmula clásica.
+    # -----------------------------------------------------------------
+    descuento_albaran: Optional[float] = None
+    precio_neto_albaran: Optional[float] = None
+
 
 class ContratoLineContextDto(_StrictModel):
     contrato_line_id: int
