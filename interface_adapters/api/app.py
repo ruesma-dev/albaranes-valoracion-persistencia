@@ -22,6 +22,11 @@ from config.settings import Settings
 from infrastructure.clients.http_valuation_ia_client import (
     HttpValuationIaClient,
 )
+from infrastructure.database import schema_contribution
+from infrastructure.database.schema_drift_check import (
+    check_drift,
+    log_drift_report,
+)
 from infrastructure.database.session_factory import SessionFactory
 from infrastructure.database.sqlalchemy_valuation_repository import (
     SqlAlchemyValuationRepository,
@@ -41,21 +46,52 @@ class RunBody(BaseModel):
 def build_app(settings: Settings) -> FastAPI:
     session_factory = SessionFactory(database_url=settings.database_url)
     repository = SqlAlchemyValuationRepository(session_factory)
-    # NO llamamos a repository.initialize() aquí a propósito.
+
+    # ----------------------------------------------------------------- #
+    # Inicialización ANSIOSA del schema (con tolerancia).
     #
-    # El servicio 6 puede arrancar ANTES de que exista la BBDD o ANTES
-    # de que el servicio 3 haya creado sus tablas (albaran_documents_merge,
-    # albaran_lines_merge, albaran_contrato_lines_merge), de las cuales
-    # dependen nuestras FK. Forzar la creación en el arranque provocaría
-    # un error inmediato en ese escenario.
+    # Históricamente teníamos init perezosa por miedo a arrancar antes
+    # que el sv3 hubiera creado sus tablas. Ahora el orquestador (sv7)
+    # garantiza el orden: aplica primero el schema del sv3 y después el
+    # nuestro. Por tanto al arrancar nosotros, las tablas externas YA
+    # están — y nos interesa correr el DDL inmediatamente para que los
+    # ALTER ... ADD COLUMN IF NOT EXISTS se apliquen ANTES del primer
+    # tráfico (y no en la primera petición, como antes).
     #
-    # Inicialización perezosa: cada método público del repositorio
-    # llama internamente a self.initialize(), que es idempotente y solo
-    # ejecuta la DDL una vez por proceso. Así, cuando llegue la primera
-    # petición de valoración (/v1/valuation/run-async desde el svc 3, o
-    # /v1/valuation/{doc}/re-run desde el front), el svc 3 ya habrá
-    # creado sus tablas y nosotros crearemos las nuestras sobre ellas
-    # sin problema.
+    # Si por la razón que sea (sv7 no se ha ejecutado, BBDD aún no
+    # provisionada) no podemos inicializar, NO matamos el proceso:
+    # logueamos warning y caemos al modo perezoso. El primer request
+    # reintentará.
+    # ----------------------------------------------------------------- #
+    try:
+        repository.initialize()
+    except Exception:
+        logger.warning(
+            "[svc6][wiring] No se pudo inicializar el schema en arranque "
+            "(¿sv7 aún no ha creado las tablas externas? ¿BBDD no "
+            "disponible?). Caemos a inicialización perezosa: la primera "
+            "petición reintentará.",
+            exc_info=True,
+        )
+
+    # ----------------------------------------------------------------- #
+    # Chequeo de drift ORM ↔ BBDD.
+    #
+    # Solo informativo: NO modifica nada. Si detecta columnas del ORM
+    # ausentes en BBDD, avisa por log antes de que llegue tráfico, lo
+    # que evita el clásico "fallo en runtime al primer INSERT". Si no
+    # hemos podido inicializar arriba, el reporte saldrá ruidoso — es
+    # lo que queremos.
+    # ----------------------------------------------------------------- #
+    if settings.schema_drift_check_enabled:
+        try:
+            report = check_drift(session_factory.engine, only_owned=True)
+            log_drift_report(report, service_label="svc6")
+        except Exception:
+            logger.exception(
+                "[svc6][wiring] error ejecutando schema_drift_check "
+                "(no crítico, seguimos)."
+            )
 
     ia_client = HttpValuationIaClient(
         base_url=settings.valuation_api_base_url,
@@ -99,12 +135,40 @@ def build_app(settings: Settings) -> FastAPI:
             "price_tolerance_pct": settings.price_tolerance_pct,
             "importe_tolerance_pct": settings.importe_tolerance_pct,
             "alm_codigo_partida": settings.alm_codigo_partida,
-            # Estado de la BBDD (útil para diagnosticar:
+            # Estado de la BBDD (útil para diagnosticar):
             #   schema_ready=False → aún no hemos podido crear tablas.
-            #   schema_ready=True  → ya corrimos la DDL al menos una vez.
-            # No forzamos creación aquí; solo informamos.
+            #   schema_ready=True  → DDL aplicado y verificado.
             "db_database_url_present": bool(settings.database_url),
             "schema_ready": repository.is_initialized,
+        }
+
+    # ----------------------------------------------------------------- #
+    # Endpoint público de schema (consumido por el orquestador sv7).
+    # ----------------------------------------------------------------- #
+    @app.get("/schema/ddl")
+    def get_schema_ddl() -> Dict[str, Any]:
+        """Devuelve el DDL de las tablas propias de este servicio.
+
+        Consumido por el orquestador (sv7) para crear / migrar el
+        schema en la BBDD compartida sin tener una copia local
+        desactualizada del DDL.
+
+        Cualquier servicio de orquestación que quiera aplicar este
+        DDL DEBE hacerlo en autocommit (cada sentencia en su propia
+        transacción) para que un fallo puntual no aborte el resto.
+        """
+        ddl = schema_contribution.get_ddl_statements()
+        return {
+            "schema_name": schema_contribution.SCHEMA_NAME,
+            "schema_version": schema_contribution.SCHEMA_VERSION,
+            "depends_on": list(schema_contribution.SCHEMA_DEPENDS_ON),
+            "owned_tables": schema_contribution.get_owned_table_names(),
+            "external_table_dependencies":
+                schema_contribution.get_external_table_dependencies(),
+            "ddl_statements": [
+                {"label": label, "sql": sql} for label, sql in ddl
+            ],
+            "total_statements": len(ddl),
         }
 
     @app.post("/v1/valuation/run")

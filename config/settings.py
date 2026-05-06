@@ -58,6 +58,21 @@ class Settings(BaseSettings):
     # Código literal que identifica 'almacén/acopio' en el albarán
     alm_codigo_partida: str = Field("ALM", alias="ALM_CODIGO_PARTIDA")
 
+    # ----------------------------------------------------------------- #
+    # Schema integrity.
+    #
+    # Si está activado (recomendado en local y en stage; opcional en
+    # prod), al arrancar se ejecuta un chequeo de drift que compara
+    # el ORM con la BBDD real y avisa por log si hay columnas
+    # ausentes. NO modifica nada — solo diagnóstico.
+    # ----------------------------------------------------------------- #
+    schema_drift_check_enabled: bool = Field(
+        True,
+        alias="SCHEMA_DRIFT_CHECK_ENABLED",
+        description="Si True, al arrancar compara columnas del ORM con "
+                    "la BBDD y avisa por log si hay drift.",
+    )
+
     api_host: str = Field("127.0.0.1", alias="API_HOST")
     api_port: int = Field(8003, alias="API_PORT")
     log_level: str = Field("INFO", alias="LOG_LEVEL")
