@@ -586,9 +586,25 @@ class ValuationBuilder:
             else:
                 unidad_cat = "unknown"
 
-        precio_final = line.precio_unitario_pdf_inferido
-        precio_source = "pdf_inference" if precio_final is not None else "none"
-        precio_agreement = "only_1b" if precio_final is not None else "neither"
+        # Reconciliación de precio IDÉNTICA a la base (no es un caso por
+        # modificador): si la IA macheó esta sintética a una línea del
+        # contrato (Paso 7 — macheo semántico), su precio llega en
+        # precio_unitario_contrato_db (Fase 1A) y se reconcilia contra el
+        # del PDF (Fase 1B). Si la IA no macheó (el contrato no tarifa ese
+        # modificador), precio_unitario_contrato_db es null y queda el del
+        # PDF (only_1b) o nada (neither). Una sintética no tiene precio
+        # declarado de albarán, así que esos campos van a None.
+        reconciliation = self._reconciler.reconcile(
+            precio_1a=line.precio_unitario_contrato_db,
+            precio_1b=line.precio_unitario_pdf_inferido,
+            precio_albaran_declarado=None,
+            cantidad_albaran=None,
+            importe_albaran=None,
+            line_already_valued=False,
+        )
+        precio_final = reconciliation.final_price
+        precio_source = reconciliation.source
+        precio_agreement = reconciliation.agreement
 
         # ------------------------------------------------------------ #
         # Cálculo de importe (con descuento heredado del padre).
@@ -644,12 +660,15 @@ class ValuationBuilder:
 
         review_required = (
             (precio_final is None and has_quantity)
+            or precio_agreement == "mismatch"
             or parent_merge_line_id is None
             or parent_albaran is None
             or line.match_confidence_pct < 60.0
         )
 
-        tarifa_pdf_encontrada: bool | None = precio_final is not None
+        tarifa_pdf_encontrada: bool | None = (
+            line.precio_unitario_pdf_inferido is not None
+        )
 
         return LineValuationRecord(
             merge_line_id=None,

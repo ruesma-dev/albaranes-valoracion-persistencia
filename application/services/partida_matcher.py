@@ -85,34 +85,79 @@ class PartidaMatcher:
                 reasons=["no_ia_match_and_no_partida"],
             )
 
-        # Identificamos el producto. Si IA casó, usamos el codigo_producto
-        # de ESA línea. Si no, usamos el del albarán.
         ia_line = self._find_by_id(
             contrato_lines, line.matched_contrato_line_id,
         )
-        codigo_producto_objetivo = (
-            (ia_line.codigo_producto if ia_line is not None else None)
-            or albaran_codigo_producto
-        )
 
-        # Buscamos una línea de contrato con (producto, partida_albaran).
-        candidate = self._find_by_producto_partida(
-            contrato_lines=contrato_lines,
-            codigo_producto=codigo_producto_objetivo,
-            codigo_partida=partida_norm,
-        )
-        if candidate is not None:
+        # ------------------------------------------------------------- #
+        # CASO PRINCIPAL — RESPETAR EL MATCH SEMÁNTICO DE LA IA.
+        #
+        # La IA (sv5) ya elige la línea de contrato más parecida mirando
+        # descripción, partida, precio y unidad. NO debemos re-apuntar por
+        # ``codigo_producto`` + ``codigo_partida``: en Sigrid el
+        # ``codigo_producto`` suele ser genérico (p.ej. "MA9999" para
+        # TODAS las líneas de la obra), de modo que (producto, partida) no
+        # distingue el hormigón de una línea de "CANCELACIÓN" o de un
+        # recargo, y acababa cogiendo la PRIMERA de la partida.
+        # ------------------------------------------------------------- #
+        if ia_line is not None:
+            ia_partida = self._normalize(ia_line.codigo_partida)
+
+            # (a) La IA casó una línea YA en la partida del albarán (o el
+            #     albarán no trae partida). Confiamos en la IA tal cual.
+            if partida_norm is None or ia_partida == partida_norm:
+                return PartidaMatchResult(
+                    partida_action="existing_matched",
+                    matched_contrato_line_id=ia_line.contrato_line_id,
+                    derived_line=None,
+                    codigo_partida_final=ia_partida or partida_norm,
+                    reasons=["ia_match_trusted"],
+                )
+
+            # (b) La IA casó una línea en OTRA partida. Re-apuntamos a la
+            #     línea con la MISMA descripción en la partida del albarán
+            #     (el contrato replica el mismo producto por partida con
+            #     idéntica descripción). NO por codigo_producto.
+            repointed = self._find_same_description_in_partida(
+                contrato_lines=contrato_lines,
+                descripcion=ia_line.descripcion,
+                codigo_partida=partida_norm,
+            )
+            if repointed is not None:
+                return PartidaMatchResult(
+                    partida_action="existing_matched",
+                    matched_contrato_line_id=repointed.contrato_line_id,
+                    derived_line=None,
+                    codigo_partida_final=partida_norm,
+                    reasons=["ia_match_repointed_to_partida_by_description"],
+                )
+
+            # (c) No existe esa descripción en la partida del albarán →
+            #     línea derivada (con la descripción/precio de la línea IA)
+            #     en la partida del albarán.
             return PartidaMatchResult(
-                partida_action="existing_matched",
-                matched_contrato_line_id=candidate.contrato_line_id,
-                derived_line=None,
+                partida_action="new_line_created",
+                matched_contrato_line_id=None,
+                derived_line=self._build_derived(
+                    line=line,
+                    contrato_lines=contrato_lines,
+                    codigo_partida_final=partida_norm,
+                    origen="missing_partida",
+                    precio_unitario_final=precio_unitario_final,
+                    unidad_albaran=unidad_albaran,
+                    albaran_descripcion=albaran_descripcion,
+                    albaran_codigo_producto=albaran_codigo_producto,
+                ),
                 codigo_partida_final=partida_norm,
-                reasons=["partida_match_in_contract"],
+                reasons=["ia_match_partida_missing_derived"],
             )
 
-        # Si no existe pero sí hay una línea IA casada, la usamos como
-        # fuente de descripción/unidad y creamos la línea derivada con
-        # la partida del albarán.
+        # ------------------------------------------------------------- #
+        # Sin match de la IA pero con partida del albarán. NO adivinamos
+        # por codigo_producto genérico (eso era lo que casaba la base con
+        # la línea de cancelación). Creamos una línea derivada en la
+        # partida del albarán y se marca para revisión aguas arriba.
+        # ------------------------------------------------------------- #
         return PartidaMatchResult(
             partida_action="new_line_created",
             matched_contrato_line_id=None,
@@ -120,14 +165,14 @@ class PartidaMatcher:
                 line=line,
                 contrato_lines=contrato_lines,
                 codigo_partida_final=partida_norm,
-                origen="missing_partida",
+                origen="no_ia_match",
                 precio_unitario_final=precio_unitario_final,
                 unidad_albaran=unidad_albaran,
                 albaran_descripcion=albaran_descripcion,
-                albaran_codigo_producto=codigo_producto_objetivo,
+                albaran_codigo_producto=albaran_codigo_producto,
             ),
             codigo_partida_final=partida_norm,
-            reasons=["partida_missing_in_contract_derived_created"],
+            reasons=["no_ia_match_derived"],
         )
 
     def resolve_partida_for_complementaria(
@@ -264,6 +309,46 @@ class PartidaMatcher:
             if cp == prod_norm and pp == part_norm:
                 return cl
         return None
+
+    @staticmethod
+    def _find_same_description_in_partida(
+        *,
+        contrato_lines: list[ContratoLineContextDto],
+        descripcion: str | None,
+        codigo_partida: str | None,
+    ) -> ContratoLineContextDto | None:
+        """Busca, dentro de ``codigo_partida``, la línea cuya descripción
+        coincide (normalizada) con ``descripcion``. Sirve para re-apuntar
+        el match de la IA a la partida del albarán cuando el contrato
+        replica el mismo producto por partidas con idéntica descripción,
+        sin depender del ``codigo_producto`` (que suele ser genérico).
+        """
+        if not descripcion or codigo_partida is None:
+            return None
+        desc_norm = PartidaMatcher._normalize_desc(descripcion)
+        part_norm = codigo_partida.strip().upper()
+        if not desc_norm:
+            return None
+        for cl in contrato_lines:
+            pp = (cl.codigo_partida or "").strip().upper()
+            if pp != part_norm:
+                continue
+            if PartidaMatcher._normalize_desc(cl.descripcion) == desc_norm:
+                return cl
+        return None
+
+    @staticmethod
+    def _normalize_desc(value: str | None) -> str:
+        """Normaliza descripción para comparar: mayúsculas, sin acentos,
+        espacios colapsados.
+        """
+        if not value:
+            return ""
+        import unicodedata
+        import re
+        nfkd = unicodedata.normalize("NFKD", value)
+        ascii_ = "".join(c for c in nfkd if not unicodedata.combining(c))
+        return re.sub(r"\s+", " ", ascii_.upper()).strip()
 
     @staticmethod
     def _normalize(value: str | None) -> str | None:

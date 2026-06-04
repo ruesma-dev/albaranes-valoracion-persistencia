@@ -59,6 +59,26 @@ class Settings(BaseSettings):
     alm_codigo_partida: str = Field("ALM", alias="ALM_CODIGO_PARTIDA")
 
     # ----------------------------------------------------------------- #
+    # Bloque 1 (may 2026): CONCILIACIÓN de modificadores (líneas
+    # sintéticas) contra la tabla de líneas de contrato de Sigrid.
+    #
+    # Si True (recomendado), cada sintética de hormigón se enlaza con su
+    # línea de incremento en la MISMA partida que la base
+    # (matched_contrato_line_id) para que concilie igual que la base. El
+    # precio SIGUE priorizando el PDF; la línea de Sigrid solo aporta
+    # precio como fallback cuando el PDF no lo trae. Si False, se
+    # mantiene el comportamiento anterior (sin enlace de las sintéticas)
+    # — interruptor de seguridad.
+    # ----------------------------------------------------------------- #
+    modifier_table_match_enabled: bool = Field(
+        True,
+        alias="MODIFIER_TABLE_MATCH_ENABLED",
+        description="Si True, las líneas sintéticas concilian contra la "
+                    "tabla de Sigrid en la partida de la base. El precio "
+                    "prioriza el PDF; la tabla es fallback de precio.",
+    )
+
+    # ----------------------------------------------------------------- #
     # Schema integrity.
     #
     # Si está activado (recomendado en local y en stage; opcional en
