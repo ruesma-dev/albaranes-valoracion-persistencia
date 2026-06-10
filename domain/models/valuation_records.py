@@ -50,7 +50,7 @@ class DerivedContratoLineRecord:
     unidad_medida: str | None
     precio_unitario: float | None
     codigo_partida: str | None
-    origen: Literal["missing_partida", "alm_acopio"]
+    origen: Literal["missing_partida", "alm_acopio", "nueva_no_match"]
 
 
 @dataclass

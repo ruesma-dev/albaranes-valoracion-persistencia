@@ -19,6 +19,7 @@ from domain.models.valuation_envelope import (
     ValuationEnvelope,
 )
 from domain.models.valuation_records import (
+    DerivedContratoLineRecord,
     LineValuationRecord,
     MatchMethod,
     ValuationHeaderRecord,
@@ -93,6 +94,9 @@ class ValuationBuilder:
         envelope: ValuationEnvelope,
         existing_document_already_valued: bool,
     ) -> tuple[ValuationHeaderRecord, list[LineValuationRecord]]:
+        # Codigo de contrato de esta valoracion (para la "linea nueva" de
+        # fallback cuando la IA no casa nada con el contrato).
+        self._codigo_contrato_actual = envelope.meta.codigo_contrato
         albaran_by_id: Dict[int, AlbaranLineContextDto] = {
             line.merge_line_id: line for line in envelope.context.lineas_albaran
         }
@@ -218,6 +222,7 @@ class ValuationBuilder:
                 partida_heredada=partida_heredada,
                 parent_record=parent_record,
                 albaran_by_id=albaran_by_id,
+                contrato_by_id=contrato_by_id,
             )
             records_by_index[idx] = record
 
@@ -343,6 +348,29 @@ class ValuationBuilder:
         if effective_matched_id is None and partida_result.derived_line is None:
             effective_matched_id = line.matched_contrato_line_id
 
+        # Fallback "LINEA NUEVA": si la IA no caso NADA (ni linea de
+        # contrato ni derivada), generamos una linea DERIVADA a partir del
+        # propio albaran (concepto/cantidad/precio/partida declarados) para
+        # que NINGUNA linea quede sin salmon. origen='nueva_no_match' -> en
+        # sv4 sale como "Nueva" (no Sigrid), igual que el modo "nueva" del
+        # boton +. Cuenta en el total (importe = cantidad x final_price).
+        nueva_derived = None
+        if effective_matched_id is None and partida_result.derived_line is None:
+            nueva_derived = DerivedContratoLineRecord(
+                codigo_contrato=(self._codigo_contrato_actual or ""),
+                codigo_producto=(albaran_line.codigo if albaran_line else None),
+                descripcion_linea=(
+                    (albaran_line.descripcion if albaran_line else None)
+                    or line.descripcion_linea
+                ),
+                unidad_medida=unidad_albaran,
+                precio_unitario=reconciliation.final_price,
+                codigo_partida=(
+                    albaran_line.codigo_partida_albaran if albaran_line else None
+                ),
+                origen="nueva_no_match",
+            )
+
         # 4. Unit conversion
         if category_match and partida_result.derived_line is not None:
             unidad_contrato_para_conversion = unidad_albaran
@@ -411,7 +439,11 @@ class ValuationBuilder:
         return LineValuationRecord(
             merge_line_id=line.merge_line_id,
             matched_contrato_line_id=effective_matched_id,
-            derived_contrato_line_record=partida_result.derived_line,
+            derived_contrato_line_record=(
+                partida_result.derived_line
+                if partida_result.derived_line is not None
+                else nueva_derived
+            ),
             precio_unitario_contrato_db=line.precio_unitario_contrato_db,
             precio_unitario_pdf_inferido=line.precio_unitario_pdf_inferido,
             precio_unitario_final=reconciliation.final_price,
@@ -464,6 +496,7 @@ class ValuationBuilder:
         partida_heredada: str | None,
         parent_record: LineValuationRecord | None,
         albaran_by_id: Dict[int, AlbaranLineContextDto],
+        contrato_by_id: Dict[int, ContratoLineContextDto],
     ) -> LineValuationRecord:
         """Construye el record de una línea sintética (sub-tanda 2D).
 
@@ -642,6 +675,51 @@ class ValuationBuilder:
         )
 
         reasons: list[str] = list(partida_result.reasons)
+
+        # --------------------------------------------------------------- #
+        # "Nueva" automatica por partida (jun 2026):
+        # La IA machea cada modificador SEMANTICAMENTE contra la tabla del
+        # contrato (Paso 7), pero la PARTIDA no la decide la IA: es
+        # deterministica. Si la linea de contrato macheada vive en OTRA
+        # partida que la del albaran (heredada del parent), NO la
+        # referenciamos directamente: derivamos una linea NUEVA en la
+        # partida del albaran, con el concepto/precio de la macheada
+        # (mismo criterio que la base). Si esta en la MISMA partida (o no
+        # hay match, o no hay partida heredada), se mantiene el match.
+        # --------------------------------------------------------------- #
+        partida_heredada_norm = (
+            partida_result.codigo_partida_final or ""
+        ).strip()
+        matched_line = (
+            contrato_by_id.get(line.matched_contrato_line_id)
+            if line.matched_contrato_line_id is not None
+            else None
+        )
+        effective_matched_id: int | None = line.matched_contrato_line_id
+        derived_record: DerivedContratoLineRecord | None = None
+        partida_action = partida_result.partida_action
+
+        if (
+            matched_line is not None
+            and partida_heredada_norm
+            and (matched_line.codigo_partida or "").strip()
+            != partida_heredada_norm
+        ):
+            derived_record = DerivedContratoLineRecord(
+                codigo_contrato=matched_line.codigo_contrato,
+                codigo_producto=None,
+                descripcion_linea=(
+                    matched_line.descripcion or line.descripcion_linea
+                ),
+                unidad_medida=matched_line.unidad_medida or unidad,
+                precio_unitario=precio_final,
+                codigo_partida=partida_result.codigo_partida_final,
+                origen="missing_partida",
+            )
+            effective_matched_id = None
+            partida_action = "new_line_created"
+            reasons.append("modifier_derived_partida_distinta")
+
         # 'modifier_identified_no_tariff' solo si el modificador tiene
         # cantidad > 0 (hay algo que cobrar) y no encontramos tarifa.
         # Si cantidad es 0 (caso típico de tiempo sin exceso), no hay
@@ -670,10 +748,30 @@ class ValuationBuilder:
             line.precio_unitario_pdf_inferido is not None
         )
 
+        # Fallback "LINEA NUEVA" para sinteticas SIN match de contrato:
+        # si la IA no caso el modificador (ni hay derivada por partida
+        # distinta), derivamos una linea NUEVA a partir del propio
+        # modificador para que NINGUNA linea quede sin salmon (mismo
+        # criterio que en _build_line). origen='nueva_no_match' -> en sv4
+        # sale como "Nueva". Cuenta en el total (importe = cant x precio).
+        if effective_matched_id is None and derived_record is None:
+            derived_record = DerivedContratoLineRecord(
+                codigo_contrato=(
+                    getattr(self, "_codigo_contrato_actual", None) or ""
+                ),
+                codigo_producto=None,
+                descripcion_linea=line.descripcion_linea,
+                unidad_medida=unidad,
+                precio_unitario=precio_final,
+                codigo_partida=partida_result.codigo_partida_final,
+                origen="nueva_no_match",
+            )
+            partida_action = partida_action or "new_line_created"
+
         return LineValuationRecord(
             merge_line_id=None,
-            matched_contrato_line_id=line.matched_contrato_line_id,
-            derived_contrato_line_record=None,
+            matched_contrato_line_id=effective_matched_id,
+            derived_contrato_line_record=derived_record,
             precio_unitario_contrato_db=line.precio_unitario_contrato_db,
             precio_unitario_pdf_inferido=line.precio_unitario_pdf_inferido,
             precio_unitario_final=precio_final,
@@ -691,7 +789,7 @@ class ValuationBuilder:
             importe_source=importe_source,  # type: ignore[arg-type]
             codigo_partida_albaran=None,
             codigo_partida_final=partida_result.codigo_partida_final,
-            partida_action=partida_result.partida_action,
+            partida_action=partida_action,
             match_confidence_pct=float(line.match_confidence_pct),
             match_method=line.match_method,  # type: ignore[arg-type]
             review_required=review_required,
