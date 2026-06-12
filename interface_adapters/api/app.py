@@ -43,6 +43,20 @@ class RunBody(BaseModel):
     line_already_valued: bool = False
 
 
+class RerunBody(BaseModel):
+    """Body del POST /v1/valuation/{document_id}/re-run (jun 2026).
+
+    El sv7 (HttpValuatorClient.rerun) SIEMPRE envió el contrato como
+    JSON body ``{"codigo_contrato": "..."}``, pero el endpoint lo
+    declaraba como parámetro suelto → FastAPI lo interpretaba como
+    QUERY PARAM y el body se descartaba en silencio: el re-run llegaba
+    con ``codigo_contrato=None`` y dependía del fallback al contrato
+    seleccionado en BBDD. Este modelo restituye el contrato del API.
+    """
+
+    codigo_contrato: str | None = None
+
+
 def build_app(settings: Settings) -> FastAPI:
     session_factory = SessionFactory(database_url=settings.database_url)
     repository = SqlAlchemyValuationRepository(session_factory)
@@ -262,14 +276,25 @@ def build_app(settings: Settings) -> FastAPI:
     @app.post("/v1/valuation/{document_id}/re-run")
     def rerun_valuation(
         document_id: str,
+        body: RerunBody | None = None,
         codigo_contrato: str | None = None,
     ) -> Dict[str, Any]:
-        """Atajo para el front: re-valora con force=True."""
+        """Atajo para el front y el sv7: re-valora con force=True.
+
+        Acepta el contrato por JSON body (``RerunBody`` — lo que envía
+        el sv7) Y por query param (compatibilidad con clientes
+        antiguos). El body tiene prioridad.
+        """
+        codigo_efectivo = (
+            body.codigo_contrato
+            if body is not None and body.codigo_contrato
+            else codigo_contrato
+        )
         try:
             result = pipeline.run(
                 RunValuationRequest(
                     document_id=document_id,
-                    codigo_contrato=codigo_contrato,
+                    codigo_contrato=codigo_efectivo,
                     force=True,
                     line_already_valued=False,
                 )
