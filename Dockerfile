@@ -1,37 +1,10 @@
-# Dockerfile — sv6 (cálculo de valoración)
-#
-# CONVENCIÓN DE CONTEXTO: el build NO se lanza desde la carpeta del
-# servicio, sino desde un contexto preparado que contiene:
-#     comun/      → paquete ruesma-albaranes-comun
-#     servicio/   → este servicio (sin .env, .venv, logs, .git, .idea)
-# Lo prepara comun/local/preparar_contexto.ps1 y lo construye
-# 'az acr build' (sin Docker Desktop). Ejemplo:
-#     .\preparar_contexto.ps1 -Servicio sv6 -Registro acralbaranesruesma
+# manifests/sv6/Dockerfile — code en raiz, comun[azure]
 FROM python:3.12-slim
-
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
-    API_HOST=0.0.0.0
-
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PIP_NO_CACHE_DIR=1 TZ=Europe/Madrid
 WORKDIR /app
-
-# 1) Paquete común (capa estable, se cachea salvo que cambie comun/).
 COPY comun/ /tmp/comun/
-RUN pip install /tmp/comun && rm -rf /tmp/comun
-
-# 2) Dependencias del servicio (capa cacheada salvo que cambie requirements).
-COPY servicio/requirements.txt /app/requirements.txt
-RUN pip install -r /app/requirements.txt
-
-# 3) Código del servicio.
-COPY servicio/ /app/
-
-# Usuario sin privilegios.
-RUN useradd --create-home appuser && chown -R appuser:appuser /app
-USER appuser
-
-# El puerto real lo fija API_PORT (.env/ACA target_port); EXPOSE es informativo.
-EXPOSE 8000
-
+RUN pip install "/tmp/comun[azure]" && rm -rf /tmp/comun
+COPY requirements.txt ./
+RUN pip install -r requirements.txt
+COPY . .
 CMD ["python", "main.py"]

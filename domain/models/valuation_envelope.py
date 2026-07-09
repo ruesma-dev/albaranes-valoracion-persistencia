@@ -60,6 +60,8 @@ class LineValuationDto(_StrictModel):
     precio_unitario_contrato_db: Optional[float] = None
     precio_unitario_pdf_inferido: Optional[float] = None
     pdf_inference_reasoning: Optional[str] = None
+    # Residuos: m³ por contenedor que eligió la IA leyendo el contrato.
+    contenedor_m3: Optional[float] = None
     razon_corta: str = ""
 
 

@@ -5,6 +5,9 @@ import logging
 from typing import Dict
 
 from application.services.importe_calculator import ImporteCalculator
+from application.services.residuos_container_calc import (
+    calcular_contenedores_residuos,
+)
 from application.services.partida_matcher import (
     PartidaMatcher,
     PartidaMatchResult,
@@ -390,12 +393,30 @@ class ValuationBuilder:
                 unidad_contrato=unidad_contrato_para_conversion,
             )
 
+        # 4.bis Residuos: la cantidad VALORADA es el nº de contenedores
+        # (contrato: X m3/contenedor), no los m3 del albaran. m3 y Tn se
+        # conservan como metadato (contexto_linea) para trabajos posteriores.
+        # Determinista y AISLADO: solo afecta a lineas tipo_familia='residuos';
+        # si no se puede calcular, cae a la cantidad normal y marca revision.
+        residuos_calc = None
+        if ctx is not None and getattr(ctx, "tipo_familia", None) == "residuos":
+            residuos_calc = calcular_contenedores_residuos(
+                contexto_linea=ctx,
+                contrato_line=contrato_by_id.get(effective_matched_id),
+                contrato_lines=contrato_lines,
+                contenedor_m3_ia=getattr(line, "contenedor_m3", None),
+            )
+        if residuos_calc is not None and residuos_calc.num_contenedores is not None:
+            _cant_conv_final = float(residuos_calc.num_contenedores)
+            _cant_alb_final = float(residuos_calc.num_contenedores)
+        else:
+            _cant_conv_final = converted.cantidad_convertida
+            _cant_alb_final = albaran_line.cantidad if albaran_line else None
+
         # 5. Importe (con descuento aplicado)
         importe_result = self._importe_calc.compute(
-            cantidad_convertida=converted.cantidad_convertida,
-            cantidad_albaran=(
-                albaran_line.cantidad if albaran_line else None
-            ),
+            cantidad_convertida=_cant_conv_final,
+            cantidad_albaran=_cant_alb_final,
             precio_unitario_final=reconciliation.final_price,
             importe_albaran_declarado=(
                 albaran_line.importe_albaran if albaran_line else None
@@ -409,6 +430,8 @@ class ValuationBuilder:
         reasons.extend(partida_result.reasons)
         reasons.extend(converted.reasons)
         reasons.extend(importe_result.reasons)
+        if residuos_calc is not None:
+            reasons.extend(residuos_calc.reasons)
         if line.match_method == "no_match":
             reasons.append("ia_no_match")
 
@@ -435,6 +458,9 @@ class ValuationBuilder:
                     "contract_line_match", "both_agreed",
                 ))
         )
+        # Residuos sin nº de contenedores calculable → revisión manual.
+        if residuos_calc is not None and residuos_calc.num_contenedores is None:
+            review_required = True
 
         return LineValuationRecord(
             merge_line_id=line.merge_line_id,
@@ -456,7 +482,10 @@ class ValuationBuilder:
             cantidad_albaran=(
                 albaran_line.cantidad if albaran_line else None
             ),
-            cantidad_convertida=converted.cantidad_convertida,
+            # Residuos: la cantidad valorada es el nº de contenedores
+            # (_cant_conv_final). Para el resto == converted.cantidad_
+            # convertida (el else de arriba lo iguala), así que no cambia.
+            cantidad_convertida=_cant_conv_final,
             factor_conversion=converted.factor,
             importe_calculado=importe_result.importe_calculado,
             importe_albaran_declarado=(
