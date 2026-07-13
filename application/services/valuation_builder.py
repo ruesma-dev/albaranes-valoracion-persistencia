@@ -5,6 +5,8 @@ import logging
 from typing import Dict
 
 from application.services.importe_calculator import ImporteCalculator
+import dataclasses
+
 from application.services.residuos_container_calc import (
     calcular_contenedores_residuos,
 )
@@ -359,20 +361,47 @@ class ValuationBuilder:
         # boton +. Cuenta en el total (importe = cantidad x final_price).
         nueva_derived = None
         if effective_matched_id is None and partida_result.derived_line is None:
-            nueva_derived = DerivedContratoLineRecord(
-                codigo_contrato=(self._codigo_contrato_actual or ""),
-                codigo_producto=(albaran_line.codigo if albaran_line else None),
-                descripcion_linea=(
-                    (albaran_line.descripcion if albaran_line else None)
-                    or line.descripcion_linea
-                ),
-                unidad_medida=unidad_albaran,
-                precio_unitario=reconciliation.final_price,
-                codigo_partida=(
-                    albaran_line.codigo_partida_albaran if albaran_line else None
-                ),
-                origen="nueva_no_match",
+            _cl_ia = (
+                contrato_by_id.get(line.matched_contrato_line_id)
+                if line.matched_contrato_line_id is not None
+                else None
             )
+            if _cl_ia is not None:
+                # (a) La IA SI caso una linea de contrato (mismo concepto)
+                #     pero el partida_matcher la descarto por cruce de
+                #     partida -> derivada MODIFICADA: respeta descripcion +
+                #     unitario del CONTRATO, imputa a la partida del ALBARAN.
+                nueva_derived = DerivedContratoLineRecord(
+                    codigo_contrato=(self._codigo_contrato_actual or ""),
+                    codigo_producto=_cl_ia.codigo_producto,
+                    descripcion_linea=_cl_ia.descripcion,
+                    unidad_medida=_cl_ia.unidad_medida,
+                    precio_unitario=_cl_ia.precio_unitario,
+                    codigo_partida=(
+                        albaran_line.codigo_partida_albaran
+                        if albaran_line else None
+                    ),
+                    origen="nueva_no_match",
+                )
+            else:
+                # (b) La IA no caso nada -> NUEVA generica desde el albaran.
+                nueva_derived = DerivedContratoLineRecord(
+                    codigo_contrato=(self._codigo_contrato_actual or ""),
+                    codigo_producto=(
+                        albaran_line.codigo if albaran_line else None
+                    ),
+                    descripcion_linea=(
+                        (albaran_line.descripcion if albaran_line else None)
+                        or line.descripcion_linea
+                    ),
+                    unidad_medida=unidad_albaran,
+                    precio_unitario=reconciliation.final_price,
+                    codigo_partida=(
+                        albaran_line.codigo_partida_albaran
+                        if albaran_line else None
+                    ),
+                    origen="nueva_no_match",
+                )
 
         # 4. Unit conversion
         if category_match and partida_result.derived_line is not None:

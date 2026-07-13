@@ -3,6 +3,11 @@ from __future__ import annotations
 
 import json
 import logging
+from typing import Any
+
+from application.services.conciliacion_orchestrator import (
+    aplicar_conciliacion_ia4,
+)
 from dataclasses import dataclass
 
 from application.services.valuation_builder import ValuationBuilder
@@ -55,10 +60,12 @@ class RunValuationPipeline:
         ia_client: ValuationIaClient,
         repository: ValuationRepository,
         builder: ValuationBuilder,
+        conciliacion_client: Any = None,
     ) -> None:
         self._ia_client = ia_client
         self._repository = repository
         self._builder = builder
+        self._conciliacion_client = conciliacion_client
 
     def run(self, request: RunValuationRequest) -> RunValuationResult:
         existing: ExistingValuationSummary | None = (
@@ -131,6 +138,18 @@ class RunValuationPipeline:
                 review_reasons=empty_header.review_reasons,
                 duplicate=False,
             )
+
+        # IA4 (condicional): conciliar semanticamente las lineas que el
+        # determinista no casara (o casadas sin precio), modificando el
+        # envelope ANTES del build. build() recalcula el importe
+        # determinista (unitario * (1 - dto/100) * cantidad). Best-effort.
+        if self._conciliacion_client is not None:
+            try:
+                aplicar_conciliacion_ia4(
+                    envelope=envelope, client=self._conciliacion_client
+                )
+            except Exception as exc:  # noqa: BLE001 - best-effort
+                logger.warning("[run-valuation] IA4 fallo: %s", exc)
 
         # Caso normal: aplicar reglas deterministas y persistir.
         header, lines = self._builder.build(

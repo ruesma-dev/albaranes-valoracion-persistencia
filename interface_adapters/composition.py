@@ -23,6 +23,9 @@ from application.services.unit_category_guard import UnitCategoryGuard
 from application.services.unit_converter import UnitConverter
 from application.services.valuation_builder import ValuationBuilder
 from config.settings import Settings
+from infrastructure.clients.http_conciliacion_client import (
+    HttpConciliacionClient,
+)
 from infrastructure.clients.http_valuation_ia_client import (
     HttpValuationIaClient,
 )
@@ -78,6 +81,10 @@ def build_run_valuation_pipeline(settings: Settings) -> RunValuationPipeline:
         base_url=settings.valuation_api_base_url,
         timeout_s=settings.valuation_api_timeout_s,
     )
+    conciliacion_client = HttpConciliacionClient(
+        base_url=settings.valuation_api_base_url,
+        timeout_s=settings.valuation_api_timeout_s,
+    )
 
     unit_registry = YamlUnitRegistry(settings.unit_registry_yaml_path)
 
@@ -99,6 +106,7 @@ def build_run_valuation_pipeline(settings: Settings) -> RunValuationPipeline:
         ia_client=ia_client,
         repository=repository,
         builder=builder,
+        conciliacion_client=conciliacion_client,
     )
     logger.info(
         "[ca-valorador][worker-wiring] pipeline construido; "
