@@ -76,6 +76,16 @@ class ValuationBuilder:
     El descuento aplicado se persiste en
     ``LineValuationRecord.descuento_albaran_aplicado`` para auditoría.
     -------------------------------------------------------------------
+
+    -------------------------------------------------------------------
+    Tanda precedencia albarán — jul 2026
+    -------------------------------------------------------------------
+    Los valores LEÍDOS del albarán (importe / unitario / descuento)
+    MANDAN sobre el precio del contrato: el casado aporta partida,
+    código y concepto, pero no pisa valores. Ver PriceReconciler e
+    ImporteCalculator. Las sintéticas M1–M7 siguen valorándose a
+    contrato (no existen en el albarán).
+    -------------------------------------------------------------------
     """
 
     def __init__(
@@ -310,6 +320,11 @@ class ValuationBuilder:
         )
 
         # 2. Price reconciliation
+        # (jul 2026) Regla de precedencia: los valores LEÍDOS del
+        # albarán mandan; el contrato solo aporta partida/código y su
+        # precio queda como fallback si el albarán no trae valores.
+        # Se pasa el descuento para derivar el unitario BRUTO desde el
+        # importe leído (importe / (cantidad × (1 − dto/100))).
         reconciliation = self._reconciler.reconcile(
             precio_1a=line.precio_unitario_contrato_db,
             precio_1b=line.precio_unitario_pdf_inferido,
@@ -323,6 +338,7 @@ class ValuationBuilder:
                 albaran_line.importe_albaran if albaran_line else None
             ),
             line_already_valued=line_already_valued,
+            descuento_pct=descuento_linea,
         )
 
         # 3. Partida matching

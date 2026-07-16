@@ -6,9 +6,11 @@ import logging
 import httpx
 
 from domain.models.valuation_envelope import ValuationEnvelope
-from domain.ports.valuation_ia_client import ValuationIaClient
+from domain.ports.valuation_ia_client import ValuationPeticionInvalida, ValuationIaClient
 
 logger = logging.getLogger(__name__)
+
+
 
 
 class HttpValuationIaClient(ValuationIaClient):
@@ -48,6 +50,14 @@ class HttpValuationIaClient(ValuationIaClient):
 
         if response.status_code >= 400:
             body_preview = (response.text or "")[:500]
+            if response.status_code < 500:
+                # 4xx: reintentar no lo va a arreglar (documento sin
+                # lineas, payload invalido...). Ver docstring de la
+                # excepcion.
+                raise ValuationPeticionInvalida(
+                    f"valuation-api devolvió {response.status_code}: "
+                    f"{body_preview}"
+                )
             raise RuntimeError(
                 f"valuation-api devolvió {response.status_code}: {body_preview}"
             )

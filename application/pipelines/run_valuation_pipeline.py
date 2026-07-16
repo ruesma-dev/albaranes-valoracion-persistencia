@@ -19,6 +19,8 @@ from domain.ports.valuation_repository import (
     ValuationRepository,
 )
 
+from domain.ports.valuation_ia_client import ValuationPeticionInvalida
+
 logger = logging.getLogger(__name__)
 
 
@@ -96,10 +98,54 @@ class RunValuationPipeline:
             request.codigo_contrato,
             request.force,
         )
-        envelope = self._ia_client.value(
-            document_id=request.document_id,
-            codigo_contrato=request.codigo_contrato,
-        )
+        try:
+            envelope = self._ia_client.value(
+                document_id=request.document_id,
+                codigo_contrato=request.codigo_contrato,
+            )
+        except ValuationPeticionInvalida as exc:
+            # (jul 2026) Peticion invalida (4xx: p. ej. 0 lineas en el
+            # merge): se CIERRA la valoracion como 'failed' con el
+            # motivo y se termina con normalidad para que el consumidor
+            # complete el mensaje. Antes esto reventaba el handler y el
+            # mensaje quedaba envenenado en la cola (reintento eterno
+            # cada 10 min y "Valorando..." infinito en el front).
+            motivo = str(exc)[:300]
+            logger.warning(
+                "[run-valuation] document_id=%s peticion INVALIDA hacia "
+                "valuation-api; se cierra como failed. Motivo: %s",
+                request.document_id, motivo,
+            )
+            failed_header = ValuationHeaderRecord(
+                document_id=request.document_id,
+                contrato_codigo=request.codigo_contrato,
+                status="failed",
+                provider_ia=None,
+                model_name=None,
+                prompt_key=None,
+                total_valorado=0.0,
+                total_lines=0,
+                lines_matched_exact=0,
+                lines_matched_semantic=0,
+                lines_matched_price_only=0,
+                lines_unmatched=0,
+                review_required=True,
+                review_reasons=[f"peticion_invalida:{motivo}"],
+                raw_ia_envelope_json=None,
+            )
+            persisted = self._repository.replace_valuation(
+                header=failed_header, lines=[]
+            )
+            return RunValuationResult(
+                valuation_id=persisted.valuation_id,
+                document_id=persisted.document_id,
+                status=persisted.status,
+                total_valorado=persisted.total_valorado,
+                total_lines=persisted.total_lines,
+                review_required=persisted.review_required,
+                review_reasons=failed_header.review_reasons,
+                duplicate=False,
+            )
 
         # Caso "no contrato seleccionado".
         if envelope.status == "no_contract":

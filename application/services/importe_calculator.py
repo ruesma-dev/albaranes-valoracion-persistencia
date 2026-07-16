@@ -25,12 +25,19 @@ class ImporteCalculator:
          ``cantidad_albaran`` como fallback.
       2. Si hay cantidad efectiva y precio unitario final, calculamos
          importe = cantidad_efectiva * precio_unitario_final.
-      3. Si además hay importe declarado en el albarán:
-           - coincide con el calculado dentro de tolerancia →
-             se usa el DECLARADO (más fiel al documento fuente).
-           - no coincide → se usa el calculado y se marca mismatch.
+      3. Si además hay importe declarado en el albarán (≠0):
+         el DECLARADO MANDA SIEMPRE (tanda jul 2026 — regla del
+         cliente: lo leído en el albarán no se pisa). Si discrepa del
+         calculado más allá de la tolerancia, se deja aviso
+         ``declared_vs_calculated_mismatch`` para revisión, pero se
+         usa el declarado igualmente. (Antes ganaba el calculado, lo
+         que permitía que un precio de contrato tipo PA pisara el
+         importe real del albarán.)
       4. Si no hay cantidad efectiva y sí declarado → declarado.
       5. Si no hay nada → None.
+
+    Importe declarado = 0 se trata como AUSENTE (una celda vacía no
+    debe valorar a 0), con reason de auditoría.
 
     -------------------------------------------------------------------
     Tanda descuento — abr 2026
@@ -77,6 +84,14 @@ class ImporteCalculator:
 
         reasons: list[str] = []
 
+        # (jul 2026) Importe declarado 0 se trata como ausente.
+        if (
+            importe_albaran_declarado is not None
+            and float(importe_albaran_declarado) == 0.0
+        ):
+            reasons.append("importe_declarado_cero_ignorado")
+            importe_albaran_declarado = None
+
         # Saneamiento del descuento: solo lo aplicamos en rango (0,100].
         descuento_aplicable = self._sanitize_descuento(
             descuento_pct, reasons,
@@ -87,13 +102,13 @@ class ImporteCalculator:
                 return ImporteResult(
                     importe_calculado=float(importe_albaran_declarado),
                     importe_source="declared_albaran",
-                    reasons=["no_calc_possible_using_declared"],
+                    reasons=reasons + ["no_calc_possible_using_declared"],
                     descuento_aplicado=None,
                 )
             return ImporteResult(
                 importe_calculado=None,
                 importe_source="none",
-                reasons=["no_calc_possible_and_no_declared"],
+                reasons=reasons + ["no_calc_possible_and_no_declared"],
                 descuento_aplicado=None,
             )
 
@@ -133,18 +148,23 @@ class ImporteCalculator:
                 descuento_aplicado=descuento_aplicable,
             )
 
+        # (jul 2026) El importe LEÍDO manda aunque discrepe del
+        # calculado: el desajuste queda como aviso para revisión, pero
+        # el valor del documento no se pisa. (Antes ganaba el
+        # calculado, permitiendo que un precio de contrato tipo PA
+        # generara importes disparatados.)
         reasons.append(
             f"declared_vs_calculated_mismatch:"
             f"{importe_albaran_declarado}!={calc}"
         )
         logger.info(
             "[importe] mismatch declarado=%s calculado=%s "
-            "(descuento=%s%%); se usa calculado.",
+            "(descuento=%s%%); manda el declarado (regla jul 2026).",
             importe_albaran_declarado, calc, descuento_aplicable,
         )
         return ImporteResult(
-            importe_calculado=calc,
-            importe_source="calculated",
+            importe_calculado=float(importe_albaran_declarado),
+            importe_source="declared_albaran",
             reasons=reasons,
             descuento_aplicado=descuento_aplicable,
         )
